@@ -268,12 +268,6 @@ def run_server(host: str = "0.0.0.0", port: int = 6000) -> None:
     config_right = f"{SCREEN_WIDTH} {SCREEN_HEIGHT} right\n".encode()
     client_right.sendall(config_right)
 
-    # -----------------------------------------------------------------------------------------
-    # Enhancement: Leaderboard Player Identification
-    # Added By:    Harshini Ponnam 
-    # Purpose:     Before the game begins, the server operator enters initials for each player.
-    #              These initials are used by record_win() when a player reaches WIN_SCORE.
-    # -----------------------------------------------------------------------------------------
 
     # Ask the server operator for player initials (used in the leaderboard)
     try:
@@ -369,12 +363,7 @@ def run_server(host: str = "0.0.0.0", port: int = 6000) -> None:
             elif right_move["value"] == "up":
                 if rightPaddle.rect.top > 10:
                     rightPaddle.rect.y -= rightPaddle.speed
-            # ---------------------------------------------------------------------------------
-            # Enhancement: Leaderboard Win Recording
-            # Added By:    Harshini Ponnam 
-            # Purpose:     When either player reaches WIN_SCORE, update the persistent
-            #              leaderboard exactly once per game (regardless of FPS or loop speed).
-            # ---------------------------------------------------------------------------------
+          
             # If someone has already won, stop ball movement but allow reset
             if lScore >= WIN_SCORE or rScore >= WIN_SCORE:
                 # Record the winner once per game (before reset)
