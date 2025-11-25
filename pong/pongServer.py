@@ -1,6 +1,6 @@
 # =================================================================================================
 # Contributing Authors:	    Jayadeep Kothapalli
-# Email Addresses:          jayadeep.kothapalli@uky.edu
+# Email Addresses:          jsko232@uky.edu
 # Date:                     2025-11-23
 # Purpose:                  Multi-threaded TCP Pong server.
 #                           Accepts two clients, assigns left/right paddles, runs authoritative
