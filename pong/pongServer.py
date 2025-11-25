@@ -3,15 +3,15 @@
 # Email Addresses:          jsko232@uky.edu
 # Date:                     2025-11-23
 # Purpose:                  Multi-threaded TCP Pong server.
-#                           Accepts two clients, assigns left/right paddles, runs authoritative
-#                           game loop (ball, paddles, score), and broadcasts state to both clients.
+#                           Accepts two clients as players (left/right), plus any number of
+#                           additional spectator clients. Runs authoritative game loop (ball,
+#                           paddles, score) and broadcasts state to all connected clients.
 #                           Supports "reset" command so players can play multiple games.
 # Misc:                     CS 371 Fall 2025 Project
 # =================================================================================================
 
 import socket
 import threading
-from pathlib import Path
 
 import pygame
 from assets.code.helperCode import Paddle, Ball
@@ -23,11 +23,22 @@ SCREEN_HEIGHT = 480
 # How many points to win
 WIN_SCORE = 5
 
+
+# ---------------------------------------------------------------------------------------------
 # Author:      Jayadeep Kothapalli
-# Purpose:     Handle incoming messages from one client and update movement state.
-# Pre:         conn is a connected TCP socket; move_dict is a shared dict with key "value".
-# Post:        move_dict["value"] is updated based on messages from this client.
-def handle_client_input(conn: socket.socket, move_dict: dict, reset_flag: dict, name: str) -> None:
+# Purpose:     Handle incoming messages from one client and update movement/reset state.
+# Pre:         conn is a connected TCP socket; move_dict is a shared dict with key "value";
+#              reset_flag is a shared dict with key "value" used to trigger a game reset.
+# Post:        move_dict["value"] is updated based on messages from this client. If a "reset"
+#              message is received, reset_flag["value"] is set to True so the main loop can
+#              reset the game state.
+# ---------------------------------------------------------------------------------------------
+def handle_client_input(
+    conn: socket.socket,
+    move_dict: dict,
+    reset_flag: dict,
+    name: str
+) -> None:
     """
     Thread function to handle incoming messages from a single client.
 
@@ -55,17 +66,61 @@ def handle_client_input(conn: socket.socket, move_dict: dict, reset_flag: dict, 
     except Exception as e:
         print(f"[SERVER] Exception in handle_client_input for {name}: {e}")
 
+
+# ---------------------------------------------------------------------------------------------
 # Author:      Jayadeep Kothapalli
-# Purpose:     Accept two clients, send them config, and run the main Pong game loop.
-# Pre:         host/port are free; expects exactly two clients for left/right paddles.
-# Post:        Broadcasts game state until a client disconnects, then shuts down server.
+# Purpose:     Accept additional spectator clients after the two players have connected.
+#              Each spectator receives a "spec" config line and is added to the spectators
+#              list so they receive state updates, but they do not control any paddles.
+# Pre:         server is a bound/listening TCP socket; spectators is a shared list of sockets;
+#              spectators_lock is a threading.Lock protecting access to that list.
+# Post:        As new spectator clients connect, they are sent a config line and appended to
+#              spectators. If the server socket is closed, this loop exits cleanly.
+# ---------------------------------------------------------------------------------------------
+def accept_spectators(
+    server: socket.socket,
+    spectators: list,
+    spectators_lock: threading.Lock
+) -> None:
+    while True:
+        try:
+            conn, addr = server.accept()
+        except OSError:
+            # Server socket was closed; exit thread
+            print("[SERVER] accept_spectators: server socket closed, stopping.")
+            break
+
+        print(f"[SERVER] Spectator connected from {addr}")
+        try:
+            config_spec = f"{SCREEN_WIDTH} {SCREEN_HEIGHT} spec\n".encode()
+            conn.sendall(config_spec)
+        except Exception as e:
+            print(f"[SERVER] Failed to send config to spectator {addr}: {e}")
+            conn.close()
+            continue
+
+        with spectators_lock:
+            spectators.append(conn)
+        print(f"[SERVER] Total spectators: {len(spectators)}")
+
+
+# ---------------------------------------------------------------------------------------------
+# Author:      Jayadeep Kothapalli
+# Purpose:     Accept two player clients, then any number of spectators, and run the main
+#              Pong game loop. Broadcasts state to all connected clients until someone
+#              disconnects, then shuts down.
+# Pre:         host/port are free to bind. Expects at least two clients to connect for play.
+# Post:        After clients disconnect or an error occurs, closes all sockets and quits
+#              Pygame cleanly.
+# ---------------------------------------------------------------------------------------------
 def run_server(host: str = "0.0.0.0", port: int = 6000) -> None:
     """
     Main server logic:
     - Creates a listening socket
-    - Accepts two clients (left & right)
-    - Sends initial config line: "width height side\n"
-    - Runs authoritative game loop and broadcasts state
+    - Accepts two clients (left & right) as players
+    - Starts a thread to accept any number of additional spectator clients
+    - Sends initial config line: "width height side\n" (side = left/right/spec)
+    - Runs authoritative game loop and broadcasts state to all clients
     """
     pygame.init()  # needed for pygame.Rect, etc.
     clock = pygame.time.Clock()
@@ -74,27 +129,34 @@ def run_server(host: str = "0.0.0.0", port: int = 6000) -> None:
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
     server.bind((host, port))
-    server.listen(2)
+    server.listen(10)  # allow more than 2 pending connections
     print(f"[SERVER] Listening on {host}:{port} ...")
 
-    # Accept left player
+    # -------------------------------------------------------------------------
+    # Accept left and right players (required for basic two-player game)
+    # -------------------------------------------------------------------------
     client_left, addr_left = server.accept()
     print(f"[SERVER] Left player connected from {addr_left}")
     config_left = f"{SCREEN_WIDTH} {SCREEN_HEIGHT} left\n".encode()
     client_left.sendall(config_left)
 
-    # Accept right player
     client_right, addr_right = server.accept()
     print(f"[SERVER] Right player connected from {addr_right}")
     config_right = f"{SCREEN_WIDTH} {SCREEN_HEIGHT} right\n".encode()
     client_right.sendall(config_right)
 
-    # Shared movement and reset flag
+    # -------------------------------------------------------------------------
+    # Prepare shared movement and reset state
+    # -------------------------------------------------------------------------
     left_move = {"value": ""}
     right_move = {"value": ""}
     reset_flag = {"value": False}
 
-    # Start input threads
+    # Spectators: additional clients who can watch the game
+    spectators: list[socket.socket] = []
+    spectators_lock = threading.Lock()
+
+    # Start input threads for the two players
     t_left = threading.Thread(
         target=handle_client_input,
         args=(client_left, left_move, reset_flag, "LEFT"),
@@ -108,7 +170,17 @@ def run_server(host: str = "0.0.0.0", port: int = 6000) -> None:
     t_left.start()
     t_right.start()
 
+    # Start an acceptor thread to allow any number of spectator connections
+    t_specs = threading.Thread(
+        target=accept_spectators,
+        args=(server, spectators, spectators_lock),
+        daemon=True,
+    )
+    t_specs.start()
+
+    # -------------------------------------------------------------------------
     # Game objects (server authoritative)
+    # -------------------------------------------------------------------------
     paddleHeight = 50
     paddleWidth = 10
     paddleStartPosY = (SCREEN_HEIGHT // 2) - (paddleHeight // 2)
@@ -130,7 +202,7 @@ def run_server(host: str = "0.0.0.0", port: int = 6000) -> None:
 
     try:
         while True:
-            # Handle reset request (from either client)
+            # Handle reset request (from either player)
             if reset_flag["value"]:
                 print("[SERVER] Reset requested, resetting game state.")
                 lScore = 0
@@ -183,17 +255,37 @@ def run_server(host: str = "0.0.0.0", port: int = 6000) -> None:
                 if ball.rect.colliderect(topWall) or ball.rect.colliderect(bottomWall):
                     ball.hitWall()
 
-            # Prepare state line for both clients
-            state_line = f"{leftPaddle.rect.y} {rightPaddle.rect.y} {ball.rect.x} {ball.rect.y} {lScore} {rScore}\n"
+            # Prepare state line for all clients
+            state_line = (
+                f"{leftPaddle.rect.y} {rightPaddle.rect.y} "
+                f"{ball.rect.x} {ball.rect.y} {lScore} {rScore}\n"
+            )
             data = state_line.encode()
 
-            # Send state to both clients
+            # Send state to both players
             try:
                 client_left.sendall(data)
                 client_right.sendall(data)
             except Exception as e:
-                print(f"[SERVER] A client disconnected while sending. Error: {e}")
+                print(f"[SERVER] A player disconnected while sending. Error: {e}")
                 break
+
+            # Send state to all spectators
+            with spectators_lock:
+                dead_specs = []
+                for spec in spectators:
+                    try:
+                        spec.sendall(data)
+                    except Exception as e:
+                        print(f"[SERVER] Spectator send failed, removing: {e}")
+                        dead_specs.append(spec)
+                # Remove any spectators that errored
+                for d in dead_specs:
+                    try:
+                        d.close()
+                    except Exception:
+                        pass
+                    spectators.remove(d)
 
             clock.tick(60)  # 60 updates per second
 
@@ -207,10 +299,27 @@ def run_server(host: str = "0.0.0.0", port: int = 6000) -> None:
             client_right.close()
         except Exception:
             pass
-        server.close()
+
+        # Close all spectators
+        try:
+            with spectators_lock:
+                for spec in spectators:
+                    try:
+                        spec.close()
+                    except Exception:
+                        pass
+                spectators.clear()
+        except Exception:
+            pass
+
+        try:
+            server.close()
+        except Exception:
+            pass
+
         pygame.quit()
         print("[SERVER] Server shut down.")
-        
+
 
 if __name__ == "__main__":
     run_server(host="0.0.0.0", port=6000)
