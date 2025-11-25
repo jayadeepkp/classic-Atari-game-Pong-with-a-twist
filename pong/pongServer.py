@@ -1,6 +1,6 @@
 # =================================================================================================
-# Contributing Authors:	    Jayadeep Kothapalli
-# Email Addresses:          jsko232@uky.edu
+# Contributing Authors:	    Jayadeep Kothapalli,Harshini Ponnam
+# Email Addresses:          jsko232@uky.edu, hpo245@uky.edu
 # Date:                     2025-11-23
 # Purpose:                  Multi-threaded TCP Pong server.
 #                           Accepts two clients as players (left/right), plus any number of
@@ -16,6 +16,10 @@ import threading
 import pygame
 from assets.code.helperCode import Paddle, Ball
 
+import json
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+
 # Screen dimensions (must match what clients expect)
 SCREEN_WIDTH = 640
 SCREEN_HEIGHT = 480
@@ -23,6 +27,121 @@ SCREEN_HEIGHT = 480
 # How many points to win
 WIN_SCORE = 5
 
+# File to persist leaderboard between server restarts
+LEADERBOARD_FILE = "leaderboard.json"
+
+# Protects concurrent access to leaderboard
+leaderboard_lock = threading.Lock()
+
+# ---------------------------------------------------------------------------------------------
+# Author(s):    Harshini Ponnam 
+# Purpose:      Helper functions for loading, saving, and updating the persistent leaderboard.
+#               The leaderboard tracks total wins for each player's initials across all games.
+# Pre:          leaderboard.json may or may not exist at startup.
+# Post:         leaderboard.json is read/written safely; leaderboard dictionary is kept in-sync
+#               and protected with a threading lock for multi-threaded access.
+# ---------------------------------------------------------------------------------------------
+
+def load_leaderboard():
+    """Load leaderboard from disk or return empty dict if not present."""
+    try:
+        with open(LEADERBOARD_FILE, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def save_leaderboard(board: dict) -> None:
+    """Save leaderboard to disk."""
+    with open(LEADERBOARD_FILE, "w") as f:
+        json.dump(board, f)
+
+
+# In-memory leaderboard: { "HP": 3, "RM": 1, ... }
+leaderboard = load_leaderboard()
+
+
+def record_win(initials: str) -> None:
+    """
+    Increment win count for the given player's initials and persist to disk.
+    """
+    if not initials:
+        return
+    initials = initials.strip().upper()
+    with leaderboard_lock:
+        leaderboard[initials] = leaderboard.get(initials, 0) + 1
+        save_leaderboard(leaderboard)
+
+# ---------------------------------------------------------------------------------------------
+# Author(s):    Harshini Ponnam 
+# Purpose:      A simple HTTP GET handler that serves a styled HTML leaderboard page at:
+#                   http://<server-ip>/           OR
+#                   http://<server-ip>/leaderboard
+#               Displays all player initials and their accumulated win counts.
+# Pre:          leaderboard dictionary must be populated; access is protected by leaderboard_lock.
+# Post:         Sends an HTML response showing the current leaderboard.
+# ---------------------------------------------------------------------------------------------
+
+class LeaderboardHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path not in ("/", "/leaderboard"):
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"Not found")
+            return
+
+        with leaderboard_lock:
+            items = sorted(leaderboard.items(), key=lambda kv: kv[1], reverse=True)
+
+        rows = ""
+        for initials, wins in items:
+            rows += f"<tr><td>{initials}</td><td>{wins}</td></tr>"
+
+        html = f"""
+        <html>
+        <head>
+            <title>CS371 Pong Leaderboard</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; background: #111; color: #eee; }}
+                table {{ border-collapse: collapse; margin: 40px auto; }}
+                th, td {{ border: 1px solid #555; padding: 8px 16px; }}
+                th {{ background: #333; }}
+                h1 {{ text-align: center; }}
+            </style>
+        </head>
+        <body>
+            <h1>Pong Leaderboard</h1>
+            <table>
+                <tr><th>Player Initials</th><th>Wins</th></tr>
+                {rows or "<tr><td colspan='2'>No games recorded yet.</td></tr>"}
+            </table>
+        </body>
+        </html>
+        """
+
+        html_bytes = html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(html_bytes)))
+        self.end_headers()
+        self.wfile.write(html_bytes)
+
+# ---------------------------------------------------------------------------------------------
+# Author(s):    Harshini Ponnam 
+# Purpose:      Starts a background HTTP server on port 80 using LeaderboardHandler. Runs
+#               concurrently with the main Pong game server without blocking gameplay.
+# Pre:          Port 80 must be available (may require administrator privileges on some systems).
+# Post:         A persistent leaderboard webpage is accessible while the Pong game is running.
+# ---------------------------------------------------------------------------------------------
+
+def start_leaderboard_server():
+    """Run a simple HTTP server on port 80 to show the leaderboard."""
+    try:
+        httpd = HTTPServer(("0.0.0.0", 80), LeaderboardHandler)
+        print("[SERVER] Leaderboard HTTP server running on port 80...")
+        httpd.serve_forever()
+    except Exception as e:
+        print(f"[SERVER] Could not start leaderboard HTTP server on port 80: {e}")
 
 # ---------------------------------------------------------------------------------------------
 # Author:      Jayadeep Kothapalli
@@ -132,6 +251,10 @@ def run_server(host: str = "0.0.0.0", port: int = 6000) -> None:
     server.listen(10)  # allow more than 2 pending connections
     print(f"[SERVER] Listening on {host}:{port} ...")
 
+    # Start HTTP leaderboard server in the background
+    http_thread = threading.Thread(target=start_leaderboard_server, daemon=True)
+    http_thread.start()
+
     # -------------------------------------------------------------------------
     # Accept left and right players (required for basic two-player game)
     # -------------------------------------------------------------------------
@@ -144,6 +267,22 @@ def run_server(host: str = "0.0.0.0", port: int = 6000) -> None:
     print(f"[SERVER] Right player connected from {addr_right}")
     config_right = f"{SCREEN_WIDTH} {SCREEN_HEIGHT} right\n".encode()
     client_right.sendall(config_right)
+
+    # -----------------------------------------------------------------------------------------
+    # Enhancement: Leaderboard Player Identification
+    # Added By:    Harshini Ponnam 
+    # Purpose:     Before the game begins, the server operator enters initials for each player.
+    #              These initials are used by record_win() when a player reaches WIN_SCORE.
+    # -----------------------------------------------------------------------------------------
+
+    # Ask the server operator for player initials (used in the leaderboard)
+    try:
+        left_initials = input("Enter initials for LEFT player (e.g., HP): ").strip().upper() or "LEFT"
+        right_initials = input("Enter initials for RIGHT player (e.g., RM): ").strip().upper() or "RIGHT"
+    except EOFError:
+        # In case input is not available (e.g., some environments), fall back to defaults
+        left_initials = "LEFT"
+        right_initials = "RIGHT"
 
     # -------------------------------------------------------------------------
     # Prepare shared movement and reset state
@@ -197,7 +336,8 @@ def run_server(host: str = "0.0.0.0", port: int = 6000) -> None:
 
     lScore = 0
     rScore = 0
-
+    # To avoid counting the same win multiple times before a reset
+    winner_recorded = False
     print("[SERVER] Game loop started.")
 
     try:
@@ -211,6 +351,7 @@ def run_server(host: str = "0.0.0.0", port: int = 6000) -> None:
                 rightPaddle.rect.y = paddleStartPosY
                 ball.reset(nowGoing="left")
                 reset_flag["value"] = False
+                winner_recorded = False
 
             # Update paddles based on last movement commands
             # Left paddle
@@ -228,11 +369,24 @@ def run_server(host: str = "0.0.0.0", port: int = 6000) -> None:
             elif right_move["value"] == "up":
                 if rightPaddle.rect.top > 10:
                     rightPaddle.rect.y -= rightPaddle.speed
-
-            # If someone has already won, keep ball still (but allow reset)
+            # ---------------------------------------------------------------------------------
+            # Enhancement: Leaderboard Win Recording
+            # Added By:    Harshini Ponnam 
+            # Purpose:     When either player reaches WIN_SCORE, update the persistent
+            #              leaderboard exactly once per game (regardless of FPS or loop speed).
+            # ---------------------------------------------------------------------------------
+            # If someone has already won, stop ball movement but allow reset
             if lScore >= WIN_SCORE or rScore >= WIN_SCORE:
-                # do nothing special here; clients will show win screen
-                pass
+                # Record the winner once per game (before reset)
+                if not winner_recorded:
+                    if lScore >= WIN_SCORE:
+                        record_win(left_initials)
+                        print(f"[SERVER] Game over. Winner: {left_initials}")
+                    elif rScore >= WIN_SCORE:
+                        record_win(right_initials)
+                        print(f"[SERVER] Game over. Winner: {right_initials}")
+                    winner_recorded = True
+                # No ball movement while game is "frozen" at win state
             else:
                 # Ball movement
                 ball.updatePos()
@@ -254,6 +408,7 @@ def run_server(host: str = "0.0.0.0", port: int = 6000) -> None:
                 # Ball & wall collisions
                 if ball.rect.colliderect(topWall) or ball.rect.colliderect(bottomWall):
                     ball.hitWall()
+
 
             # Prepare state line for all clients
             state_line = (
