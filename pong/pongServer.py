@@ -1,6 +1,6 @@
 # =================================================================================================
-# Contributing Authors:     Jayadeep Kothapalli, Harshini Ponnam
-# Email Addresses:          jsko232@uky.edu, hpo245@uky.edu
+# Contributing Authors:     Jayadeep Kothapalli, Harshini Ponnam, Rudwika Manne
+# Email Addresses:          jsko232@uky.edu, hpo245@uky.edu, rma425@uky.edu
 # Date:                     2025-11-23
 # Purpose:                  Multi-threaded TCP Pong server.
 #                           Accepts two clients as players (left/right), plus any number of
@@ -22,6 +22,7 @@ from typing import Dict, List
 
 import pygame
 from assets.code.helperCode import Paddle, Ball
+from security import encrypt_data, decrypt_data, register_user, authenticate
 
 # Screen dimensions (must match what clients expect and what client uses)
 SCREEN_WIDTH: int = 640
@@ -159,12 +160,71 @@ def start_leaderboard_server() -> None:
 # Network helpers
 # ---------------------------------------------------------------------------------------------
 
-# Author:      Jayadeep Kothapalli
-# Purpose:     Receive movement and rematch messages from a single client.
+# ---------------------------------------------------------------------------------------------
+# Player registration + authentication (plaintext commands, encrypted gameplay)
+# ---------------------------------------------------------------------------------------------
+
+# Author(s):   Rudwika Manne
+# Purpose:     Simple username/password registration + login before the game starts.
+#              Protocol (per client, PLAINTEXT lines):
+#                  register <username> <password>
+#                  login <username> <password>
+#              Server stores a salted+hashed password in users.json using security.py helpers.
+# Pre:         conn is a connected socket. Called right after the TCP connection is accepted.
+# Post:        Returns an authenticated username string, which we later shorten to initials for
+#              the leaderboard. Retries until success or disconnect.
+def auth_player(conn: socket.socket, role: str) -> str:
+    """
+    Handle registration / login for a single player.
+
+    Returns:
+        Authenticated username (str). If the client disconnects, raises ConnectionError.
+    """
+    intro = (
+        f"AUTH {role}: type 'register <username> <password>' "
+        f"or 'login <username> <password>'\n"
+    )
+    conn.sendall(intro.encode("utf-8"))
+
+    buffer = ""
+    while True:
+        data = conn.recv(1024)
+        if not data:
+            raise ConnectionError(f"Client {role} disconnected during auth.")
+        buffer += data.decode("utf-8")
+
+        while "\n" in buffer:
+            line, buffer = buffer.split("\n", 1)
+            parts = line.strip().split()
+            if len(parts) != 3:
+                conn.sendall(b"ERR invalid format; use register/login <user> <pass>\n")
+                continue
+
+            cmd, username, password = parts
+            cmd = cmd.lower()
+
+            if cmd == "register":
+                if register_user(username, password):
+                    conn.sendall(b"OK registered\n")
+                    return username
+                else:
+                    conn.sendall(b"ERR username already exists\n")
+            elif cmd == "login":
+                if authenticate(username, password):
+                    conn.sendall(b"OK logged-in\n")
+                    return username
+                else:
+                    conn.sendall(b"ERR bad username or password\n")
+            else:
+                conn.sendall(b"ERR unknown command (use register/login)\n")
+
+
+# Author:      Jayadeep Kothapalli, Rudwika Manne
+# Purpose:     Receive encrypted movement and rematch messages from a single client.
 # Pre:         conn is a connected TCP socket. move_dict and ready_flag are dictionaries
-#              with key "value" shared with the main thread. move_dict["value"] holds the
-#              last valid movement command ("up", "down", or ""), and ready_flag["value"]
-#              is a boolean indicating if this player has requested a rematch.
+#              with key "value" shared with the main thread. After authentication, the
+#              client sends encrypted Fernet tokens (one per line) for:
+#                  "up", "down", "" (no movement), or "ready".
 # Post:        While the connection is open, move_dict["value"] is updated whenever an
 #              "up"/"down"/"" message is received. When a "ready" message is received,
 #              ready_flag["value"] is set to True. When the client disconnects, the
@@ -176,25 +236,35 @@ def handle_client_input(
     name: str
 ) -> None:
     """
-    Thread function to handle incoming messages from a single client.
+    Thread function to handle incoming *encrypted* messages from a single client.
 
-    Messages:
-      "up" / "down" / ""   -> update move_dict["value"]
-      "ready"              -> set ready_flag["value"] = True (player pressed R to rematch)
+    Each line from the client is:
+        encrypt_data("up" | "down" | "" | "ready") + b"\\n"
     """
     try:
         with conn:
-            buffer = ""
+            buffer = b""
             while True:
                 data = conn.recv(1024)
                 if not data:
                     print(f"[SERVER] {name} disconnected.")
                     break
-                buffer += data.decode()
-                # Process complete lines
-                while "\n" in buffer:
-                    line, buffer = buffer.split("\n", 1)
-                    msg = line.strip()
+                buffer += data
+
+                # Process complete encrypted lines
+                while b"\n" in buffer:
+                    line, buffer = buffer.split(b"\n", 1)
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    try:
+                        msg = decrypt_data(line)
+                    except Exception as e:
+                        print(f"[SERVER] Failed to decrypt message from {name}: {e}")
+                        continue
+
+                    msg = msg.strip()
                     if msg in ("up", "down", ""):
                         move_dict["value"] = msg
                     elif msg == "ready":
@@ -281,21 +351,22 @@ def run_server(host: str = "0.0.0.0", port: int = 6000) -> None:
     # -------------------------------------------------------------------------
     client_left, addr_left = server.accept()
     print(f"[SERVER] Left player connected from {addr_left}")
-    config_left = f"{SCREEN_WIDTH} {SCREEN_HEIGHT} left\n".encode()
-    client_left.sendall(config_left)
+    client_left.sendall(f"{SCREEN_WIDTH} {SCREEN_HEIGHT} left\n".encode("utf-8"))
 
     client_right, addr_right = server.accept()
     print(f"[SERVER] Right player connected from {addr_right}")
-    config_right = f"{SCREEN_WIDTH} {SCREEN_HEIGHT} right\n".encode()
-    client_right.sendall(config_right)
+    client_right.sendall(f"{SCREEN_WIDTH} {SCREEN_HEIGHT} right\n".encode("utf-8"))
 
-    # Ask for player initials for leaderboard recording
-    try:
-        left_initials: str = input("Enter initials for LEFT player (e.g., HP): ").strip().upper() or "LEFT"
-        right_initials: str = input("Enter initials for RIGHT player (e.g., RM): ").strip().upper() or "RIGHT"
-    except EOFError:
-        left_initials = "LEFT"
-        right_initials = "RIGHT"
+    # -------------------------------------------------------------------------
+    # Player registration + authentication (uses security.py)
+    # -------------------------------------------------------------------------
+    left_username = auth_player(client_left, "LEFT")
+    right_username = auth_player(client_right, "RIGHT")
+
+    # Use first 3 characters of username as leaderboard initials
+    left_initials: str = (left_username[:3] or "LEFT").upper()
+    right_initials: str = (right_username[:3] or "RIGHT").upper()
+
 
     # -------------------------------------------------------------------------
     # Shared movement and rematch state
@@ -432,24 +503,27 @@ def run_server(host: str = "0.0.0.0", port: int = 6000) -> None:
             # Prepare state line for all clients
             state_line: str = (
                 f"{leftPaddle.rect.y} {rightPaddle.rect.y} "
-                f"{ball.rect.x} {ball.rect.y} {lScore} {rScore}\n"
+                f"{ball.rect.x} {ball.rect.y} {lScore} {rScore}"
             )
-            data: bytes = state_line.encode()
+            # Plaintext version (for spectators)
+            plain_state: bytes = (state_line + "\n").encode("utf-8")
+            # Encrypted version (for LEFT/RIGHT players)
+            enc_state: bytes = encrypt_data(state_line) + b"\n"
 
-            # Send state to both players
+            # Send encrypted state to both players
             try:
-                client_left.sendall(data)
-                client_right.sendall(data)
+                client_left.sendall(enc_state)
+                client_right.sendall(enc_state)
             except Exception as e:
                 print(f"[SERVER] A player disconnected while sending. Error: {e}")
                 break
 
-            # Send state to all spectators
+            # Send plaintext state to all spectators (no change needed on spectator clients)
             with spectators_lock:
                 dead_specs: List[socket.socket] = []
                 for spec in spectators:
                     try:
-                        spec.sendall(data)
+                        spec.sendall(plain_state)
                     except Exception as e:
                         print(f"[SERVER] Spectator send failed, removing: {e}")
                         dead_specs.append(spec)
