@@ -421,7 +421,7 @@ def joinServer(ip: str, port: str, errorLabel, app) -> None:
 # ---------------------------------------------------------------------------------------------
 # startScreen function
 # ---------------------------------------------------------------------------------------------
-# Author:      Rudwika Manne, Jayadeep Kothapalli
+# Author:      Jayadeep Kothapalli
 # Purpose:     Display a Tkinter-based start screen that asks the user for server IP and port.
 #              Shows the project logo and a Join button that calls joinServer().
 # Pre:         Tkinter is available (HAS_TK = True) and logo.png is present in IMAGES_DIR.
