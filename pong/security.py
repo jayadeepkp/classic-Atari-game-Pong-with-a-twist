@@ -1,3 +1,14 @@
+# =================================================================================================
+# Contributing Authors:     Rudwika Manne, Harshini Ponnam, Jayadeep Kothapalli
+# Email Addresses:          rma425@uky.edu, hpo245@uky.edu, jsko232@uky.edu
+# Date:                     2025-11-26
+# Purpose:                  Provide secure password handling (salted hashing), persistent
+#                           user registration/login storage, and symmetric encryption utilities
+#                           using Fernet for protecting all player-to-server communication.
+#                           This module is imported by both pongClient and pongServer.
+# Misc:                     CS 371 Fall 2025 Project — Authentication + Encryption Extension
+# =================================================================================================
+
 import json
 import os
 import hashlib
@@ -10,7 +21,12 @@ KEY_FILE = "fernet.key"
 # ==========================
 # PASSWORD HASHING
 # ==========================
-
+# Author:      Harshini Ponnam
+# Purpose:     Generate a secure salted hash for a new password using PBKDF2-HMAC (SHA-256).
+# Pre:         password is a non-empty UTF-8 string provided during registration.
+# Post:        Returns `salt || hash` as raw bytes, where:
+#                  salt = 16 random bytes
+#                  hash = PBKDF2-HMAC result with 200k iterations
 def hash_password(password: str) -> bytes:
     """Return salt || hash for the given password."""
     salt = os.urandom(16)
@@ -22,7 +38,14 @@ def hash_password(password: str) -> bytes:
     )
     return salt + hashed
 
-
+# ---------------------------------------------------------------------------------------------
+# verify_password function
+# ---------------------------------------------------------------------------------------------
+# Author:      Harshini Ponnam
+# Purpose:     Verify a user-entered password by recomputing PBKDF2 and comparing hashes.
+# Pre:         stored = salt||hash bytes from users.json,
+#              password = plaintext password user tries to log in with.
+# Post:        Returns True if password is correct; otherwise False.
 def verify_password(stored: bytes, password: str) -> bool:
     """Check password against stored salt||hash."""
     salt = stored[:16]
@@ -39,7 +62,10 @@ def verify_password(stored: bytes, password: str) -> bool:
 # ==========================
 # USER REGISTRATION / LOGIN
 # ==========================
-
+# Author:      Rudwika Manne
+# Purpose:     Load the persistent users database from disk.
+# Pre:         USERS_FILE ("users.json") may or may not exist.
+# Post:        Returns a dict: { username: base64(salt||hash) }.
 def load_users() -> dict:
     if not os.path.exists(USERS_FILE):
         return {}
@@ -51,7 +77,13 @@ def save_users(users: dict) -> None:
     with open(USERS_FILE, "w") as f:
         json.dump(users, f)
 
-
+# ---------------------------------------------------------------------------------------------
+# register_user function
+# ---------------------------------------------------------------------------------------------
+# Author:      Rudwika Manne
+# Purpose:     Register a new user by hashing their password and storing it persistently.
+# Pre:         username/password are raw strings from client auth; username must not exist.
+# Post:        Writes new entry to users.json and returns True if successful, False otherwise.
 def register_user(username: str, password: str) -> bool:
     """
     Register new user. Returns True on success, False if username exists.
@@ -83,7 +115,10 @@ def authenticate(username: str, password: str) -> bool:
 # ==========================
 # ENCRYPTION (Fernet)
 # ==========================
-
+# Author:      Jayadeep Kothapalli
+# Purpose:     Load an existing Fernet key if present; otherwise generate and save a new one.
+# Pre:         KEY_FILE ("fernet.key") may or may not exist on disk.
+# Post:        Returns a bytes key suitable for Fernet symmetric encryption.
 def _load_or_create_key() -> bytes:
     if not os.path.exists(KEY_FILE):
         key = Fernet.generate_key()
