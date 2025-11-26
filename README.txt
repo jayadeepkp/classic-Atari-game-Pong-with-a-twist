@@ -47,6 +47,15 @@ The client:
 Install Instructions
 ====================
 
+Python Version:
+This project requires:
+
+    Python 3.10 or newer
+
+Recommended versions: Python 3.10 – Python 3.12
+
+Older versions of Python may fail to install the "cryptography" package.
+
 1. Create and activate a virtual environment (recommended):
 
        python3 -m venv venv
