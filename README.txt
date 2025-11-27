@@ -13,6 +13,9 @@ This project includes additional support files such as security.py
 (fonts, images, sounds, helperCode). These must remain in the same directory
 structure for the program to run correctly.
 
+The project uses a shared Fernet key (fernet.key) loaded by security.py. 
+This file must stay with the project so that the server and all clients can encrypt/decrypt messages correctly.
+
 
 Versioning
 ==========
@@ -43,6 +46,12 @@ The client:
     • Sends encrypted paddle movement and rematch signals  
     • Supports full spectator mode (read-only stream)  
 
+Prerequisites
+=============
+- Python 3.10+ installed with:
+    - tkinter (for the GUI join screen; if missing, the client will fall back to CLI mode)
+    - Pygame
+    - The cryptography package
 
 Install Instructions
 ====================
@@ -121,77 +130,3 @@ Note
   the Pong game still works normally.
 - Tkinter UI may not appear on minimal environments;
   the client automatically switches to CLI mode.
-
-
-
-
-Sequence Client-Server Model.
-
-+----------------+                     +----------------+
-|  PlayerClient  |                     |   PongServer   |
-+----------------+                     +----------------+
-        |                                         |
-        |------------- TCP connect -------------->|
-        |                                         |
-        |<---- "SCREEN_WIDTH SCREEN_HEIGHT side" -|
-        |   (e.g., "640 480 left")               |
-        |                                         |
-        |         AUTHENTICATION (plaintext)      |
-        |     (loop until login/register OK)      |
-        |---------------------------------------->|
-        |  "register/login username password"     |
-        |                                         |
-        |<----------------------------------------|
-        |   "OK registered" / "OK logged-in"      |
-        |   or "ERR ..."                          |
-        |   (repeat on error)                     |
-        |                                         |
-        |       ENCRYPTED GAMEPLAY LOOP           |
-        |      (runs every frame at 60 FPS)       |
-        |---------------------------------------->|
-        |  encrypt("up" / "down" / "")            |
-        |                                         |
-        |<----------------------------------------|
-        |  encrypt("leftY rightY ballX ballY     |
-        |           lScore rScore")              |
-        |                                         |
-        |   (client renders paddles, ball, score)|
-        |                                         |
-        |      GAME OVER & REMATCH SEQUENCE       |
-        |<----------------------------------------|
-        | encrypt("... state with WIN_SCORE ...") |
-        |   (client shows win message)            |
-        |                                         |
-        |---- encrypt("ready") after player R --->|
-        |                                         |
-        |          (server side logic)            |
-        |  if left_ready && right_ready:          |
-        |      reset scores, paddles, ball        |
-        |      start new game                     |
-        |                                         |
-        |<----------------------------------------|
-        |  encrypt(new game state frames...)      |
-        |                                         |
-        :      (loop continues for next game)     :
-
-==================================================================
-
-+--------------------+                  +----------------+
-|  SpectatorClient   |                  |   PongServer   |
-+--------------------+                  +----------------+
-          |                                      |
-          |----------- TCP connect ------------->|
-          |                                      |
-          |<--- "SCREEN_WIDTH SCREEN_HEIGHT spec"|
-          |                                      |
-          |     SPECTATOR VIEW LOOP (every frame)|
-          |------------------------------------->|
-          |  ""   (empty movement line, ignored) |
-          |                                      |
-          |<-------------------------------------|
-          |  "leftY rightY ballX ballY          |
-          |      lScore rScore"   (PLAINTEXT)    |
-          |                                      |
-          | (client updates paddles/ball/score)  |
-          |                                      |
-          :         (loop repeats)               :

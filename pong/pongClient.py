@@ -450,39 +450,51 @@ def auth_over_socket(client: socket.socket) -> bool:
     try:
         intro = client.recv(1024).decode("utf-8", errors="ignore").strip()
         if intro:
-            print(intro)
+            print("\n[SERVER]", intro)
     except Exception as e:
-        print(f"Error receiving auth intro: {e}")
+        print(f"[ERROR] Receiving auth intro failed: {e}")
         return False
 
     while True:
-        choice = input("Do you want to register [r] or login [l]? ").strip().lower()
+        print("\n============================================")
+        print("               Authentication                ")
+        print("============================================")
+        print("  [r] Register a new account")
+        print("  [l] Login with existing account")
+        choice = input("Choose an option [r/l]: ").strip().lower()
+
         if choice not in ("r", "l"):
-            print("Please type 'r' or 'l'.")
+            print("[WARN] Please type 'r' to register or 'l' to login.")
             continue
 
         username = input("Username: ").strip()
-        password = input("Password: ").strip()
+        password = input("Password: ").strip()   # can use getpass if you want
+
+        if not username or not password:
+            print("[WARN] Username and password cannot be empty.")
+            continue
+
         cmd = "register" if choice == "r" else "login"
         message = f"{cmd} {username} {password}\n"
+
         try:
             client.sendall(message.encode("utf-8"))
         except Exception as e:
-            print(f"Error sending auth command: {e}")
+            print(f"[ERROR] Sending auth command failed: {e}")
             return False
 
         try:
             resp = client.recv(1024).decode("utf-8", errors="ignore").strip()
         except Exception as e:
-            print(f"Error receiving auth response: {e}")
+            print(f"[ERROR] Receiving auth response failed: {e}")
             return False
 
-        print("Server:", resp)
+        print("[SERVER]", resp)
         if resp.startswith("OK"):
-            # Success!
+            print("[AUTH] Authentication successful.")
             return True
         else:
-            print("Authentication failed, please try again.")
+            print("[AUTH] Authentication failed, please try again.")
 
 # ---------------------------------------------------------------------------------------------
 # joinServer function
@@ -618,23 +630,30 @@ def startScreen() -> None:
 def joinServer_cli() -> None:
     """
     Simple command-line join for environments without Tkinter.
-    Asks for server IP and port in the terminal.
+    Nicer text UI for entering server info and showing role/controls.
     """
+    print("============================================")
+    print("        CS371 Pong Client (CLI Mode)        ")
+    print("============================================")
+    print("If the Tkinter window is not available,")
+    print("you can still join the game from here.\n")
+
     ip: str = input("Server IP [127.0.0.1]: ").strip() or "127.0.0.1"
     port_str: str = input("Server Port [6000]: ").strip() or "6000"
 
     try:
         port: int = int(port_str)
     except ValueError:
-        print("Port must be an integer.")
+        print("\n[ERROR] Port must be an integer.")
         return
 
     client: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
+    print(f"\n[INFO] Connecting to {ip}:{port} ...")
     try:
         client.connect((ip, port))
     except Exception as e:
-        print(f"Could not connect to server: {e}")
+        print(f"[ERROR] Could not connect to server: {e}")
         return
 
     try:
@@ -642,7 +661,7 @@ def joinServer_cli() -> None:
         cfg: str = client.recv(1024).decode().strip()
         parts = cfg.split()
         if len(parts) != 3:
-            print(f"Bad config from server: {cfg}")
+            print(f"[ERROR] Bad config from server: {cfg}")
             client.close()
             return
 
@@ -650,20 +669,39 @@ def joinServer_cli() -> None:
         screenHeight: int = int(parts[1])
         playerPaddle: str = parts[2]  # "left" or "right" or "spec"
 
-        print(f"Connected! Screen: {screenWidth}x{screenHeight}, you are {playerPaddle}.")
+        print("\n[INFO] Connected successfully!")
+        print("============================================")
+        print(f"  Screen size : {screenWidth} x {screenHeight}")
+        print(f"  Your role   : {playerPaddle.upper()}")
+        print("============================================")
 
     except Exception as e:
-        print(f"Error receiving config: {e}")
+        print(f"[ERROR] Error receiving config: {e}")
         client.close()
         return
 
     # Auth only for real players
     if playerPaddle in ("left", "right"):
+        print("\n[AUTH] Login / Registration required to play.")
         if not auth_over_socket(client):
-            print("Authentication failed or connection closed.")
+            print("[ERROR] Authentication failed or connection closed.")
             client.close()
             return
+    else:
+        print("\n[INFO] You joined as a SPECTATOR (watch-only).")
 
+    print("\n============================================")
+    print("               Game Controls                 ")
+    print("============================================")
+    if playerPaddle in ("left", "right"):
+        print("  ↑ / ↓   : Move paddle up / down")
+        print("  R       : After game over, signal ready")
+    else:
+        print("  Spectator mode: no paddle controls.")
+    print("  Close the game window to exit.")
+    print("============================================\n")
+
+    print("[INFO] Launching game window...")
     playGame(screenWidth, screenHeight, playerPaddle, client)
 
 
