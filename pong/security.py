@@ -13,11 +13,9 @@ import json
 import os
 import hashlib
 import base64
-from typing import Dict
 from cryptography.fernet import Fernet
 
-USERS_FILE: str = "users.json"
-KEY_FILE: str = "fernet.key"
+USERS_FILE = "users.json"
 
 # ==========================
 # PASSWORD HASHING
@@ -30,8 +28,8 @@ KEY_FILE: str = "fernet.key"
 #                  hash = PBKDF2-HMAC result with 200k iterations
 def hash_password(password: str) -> bytes:
     """Return salt || hash for the given password."""
-    salt: bytes = os.urandom(16)
-    hashed: bytes = hashlib.pbkdf2_hmac(
+    salt = os.urandom(16)
+    hashed = hashlib.pbkdf2_hmac(
         "sha256",
         password.encode("utf-8"),
         salt,
@@ -50,9 +48,9 @@ def hash_password(password: str) -> bytes:
 # Post:        Returns True if password is correct; otherwise False.
 def verify_password(stored: bytes, password: str) -> bool:
     """Check password against stored salt||hash."""
-    salt: bytes = stored[:16]
-    stored_hash: bytes = stored[16:]
-    check_hash: bytes = hashlib.pbkdf2_hmac(
+    salt = stored[:16]
+    stored_hash = stored[16:]
+    check_hash = hashlib.pbkdf2_hmac(
         "sha256",
         password.encode("utf-8"),
         salt,
@@ -68,18 +66,14 @@ def verify_password(stored: bytes, password: str) -> bool:
 # Purpose:     Load the persistent users database from disk.
 # Pre:         USERS_FILE ("users.json") may or may not exist.
 # Post:        Returns a dict: { username: base64(salt||hash) }.
-def load_users() -> Dict[str, str]:
+def load_users() -> dict:
     if not os.path.exists(USERS_FILE):
         return {}
     with open(USERS_FILE, "r") as f:
         return json.load(f)
 
 
-# Author:      Rudwika Manne
-# Purpose:     Save the in-memory users mapping back to disk as JSON.
-# Pre:         users is a dict mapping usernames to base64-encoded salt||hash strings.
-# Post:        Overwrites USERS_FILE with the serialized users dict.
-def save_users(users: Dict[str, str]) -> None:
+def save_users(users: dict) -> None:
     with open(USERS_FILE, "w") as f:
         json.dump(users, f)
 
@@ -98,28 +92,24 @@ def register_user(username: str, password: str) -> bool:
     username = username.strip()
     if not username:
         return False
-    users: Dict[str, str] = load_users()
+    users = load_users()
     if username in users:
         return False
-    salted_hash: bytes = hash_password(password)
+    salted_hash = hash_password(password)
     users[username] = base64.b64encode(salted_hash).decode("ascii")
     save_users(users)
     return True
 
 
-# Author:      Rudwika Manne
-# Purpose:     Authenticate an existing user by verifying their password.
-# Pre:         username exists in users.json and has a stored base64(salt||hash) entry.
-# Post:        Returns True if password matches stored hash, False otherwise.
 def authenticate(username: str, password: str) -> bool:
     """
     Authenticate existing user. Returns True on success.
     """
     username = username.strip()
-    users: Dict[str, str] = load_users()
+    users = load_users()
     if username not in users:
         return False
-    stored: bytes = base64.b64decode(users[username])
+    stored = base64.b64decode(users[username])
     return verify_password(stored, password)
 
 
@@ -127,35 +117,24 @@ def authenticate(username: str, password: str) -> bool:
 # ENCRYPTION (Fernet)
 # ==========================
 # Author:      Jayadeep Kothapalli
-# Purpose:     Load an existing Fernet key if present; otherwise generate and save a new one.
-# Pre:         KEY_FILE ("fernet.key") may or may not exist on disk.
-# Post:        Returns a bytes key suitable for Fernet symmetric encryption.
-def _load_or_create_key() -> bytes:
-    if not os.path.exists(KEY_FILE):
-        key: bytes = Fernet.generate_key()
-        with open(KEY_FILE, "wb") as f:
-            f.write(key)
-        return key
-    with open(KEY_FILE, "rb") as f:
-        return f.read()
+# Purpose:     Provide a single shared Fernet key for all server/client instances.
+#              This makes it easy to run the server and clients on different machines
+#              during the demo while still keeping gameplay messages encrypted.
+# Pre:         The same security.py file is used on the server and all clients.
+# Post:        encrypt_data() and decrypt_data() use the same symmetric key everywhere.
+#
+# NOTE: For a real production system, you would not hard-code the key in source code.
+#       For this class project and LAN demo, a fixed shared key is acceptable.
+FERNET_KEY: bytes = b"YVZzQ1FjQmJ2VWNtZlA3Q1F4Z2p6V0hJbW1Kc1NPaXc="
+
+_FERNET = Fernet(FERNET_KEY)
 
 
-_FERNET: Fernet = Fernet(_load_or_create_key())
-
-
-# Author:      Jayadeep Kothapalli
-# Purpose:     Encrypt a small text message (e.g., "up", "down", "ready", or state line).
-# Pre:         plaintext is a UTF-8 string; _FERNET has been initialized with a shared key.
-# Post:        Returns an opaque Fernet token as bytes that can be sent over the network.
 def encrypt_data(plaintext: str) -> bytes:
     """Encrypt a text line and return bytes token."""
     return _FERNET.encrypt(plaintext.encode("utf-8"))
 
 
-# Author:      Jayadeep Kothapalli
-# Purpose:     Decrypt an incoming Fernet token and return the original UTF-8 text.
-# Pre:         token is either a bytes object or a UTF-8 string representation of a token.
-# Post:        Returns the decrypted plaintext string (or raises if token is invalid).
 def decrypt_data(token: str | bytes) -> str:
     """Decrypt token (str or bytes) and return plaintext string."""
     if isinstance(token, str):
