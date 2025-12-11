@@ -1,3 +1,10 @@
+Design and implement the classic Atari game Pong with a twist; 
+it will be a multiplayer game with client-server architecture. Created both the client and server
+logic using what you have learned in the socket programming lessons, allowing players to compete against
+each other in a game of Pong over a network connection
+
+
+
 Contact Info
 ============
 
